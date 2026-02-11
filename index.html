@@ -1,0 +1,559 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Heart, Lock, Unlock, Gift, Calendar, MapPin, 
+  Camera, Music, Share2, Trash2, Edit3, Eye, 
+  LogOut, Shield, Sparkles, User, Key 
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, 
+  signOut, onAuthStateChanged, updateProfile 
+} from 'firebase/auth';
+import { 
+  getFirestore, collection, addDoc, getDocs, doc, 
+  updateDoc, deleteDoc, query, where, getDoc 
+} from 'firebase/firestore';
+
+/**
+ * LOVELOCK SURPRISE - CONFIGURATION
+ * Replace the values below with your actual Firebase Project keys
+ */
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY_HERE",
+  authDomain: "your-project.firebaseapp.com",
+  projectId: "your-project-id",
+  storageBucket: "your-project.appspot.com",
+  messagingSenderId: "123456789",
+  appId: "1:123456789:web:abcdef"
+};
+
+// Initialize Firebase (Conditional to prevent crashing if config is empty)
+let auth, db;
+try {
+  const app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.warn("Firebase not initialized. Fill in config to make DB work.");
+}
+
+// --- UTILITY FUNCTIONS ---
+
+const calculateTimeTogether = (startDate) => {
+  const start = new Date(startDate);
+  const now = new Date();
+  const diff = now - start;
+  
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const years = Math.floor(days / 365);
+  const remainingDays = days % 365;
+  
+  return { years, days: remainingDays, totalDays: days };
+};
+
+const generateAutoMessage = (sender, receiver, place, years) => {
+  return My dearest ${receiver}, \n\nIt feels like just yesterday we first met at ${place}. These ${years > 0 ? `${years} years and ` : ''} magical moments have been the best of my life. \n\nYou are my heart, my soul, and my forever. \n\nLove,\n${sender};
+};
+
+// --- COMPONENTS ---
+
+// 1. ANIMATED BACKGROUND (Floating Hearts)
+const FloatingHearts = () => {
+  return (
+    <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+      {[...Array(15)].map((_, i) => (
+        <div
+          key={i}
+          className="absolute text-pink-500 opacity-20 animate-float"
+          style={{
+            left: ${Math.random() * 100}%,
+            top: ${Math.random() * 100}%,
+            animationDuration: ${5 + Math.random() * 10}s,
+            fontSize: ${20 + Math.random() * 30}px,
+          }}
+        >
+          <Heart fill="currentColor" />
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// 2. ADMIN PANEL
+const AdminPanel = ({ onLogout }) => {
+  const [stats, setStats] = useState({ users: [], surprises: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!db) return;
+      try {
+        const usersSnap = await getDocs(collection(db, 'users')); // assuming user profiles stored
+        const surprisesSnap = await getDocs(collection(db, 'surprises'));
+        
+        const surprises = [];
+        surprisesSnap.forEach(doc => surprises.push({ id: doc.id, ...doc.data() }));
+        
+        setStats({ 
+          usersCount: 0, // In standard Firebase Auth, we can't list all users client-side easily without a function, using surprises as proxy
+          surprises 
+        });
+      } catch (error) {
+        console.error("Admin fetch error", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-red-500 flex items-center gap-2">
+            <Shield className="w-8 h-8" /> LoveLock GOD MODE
+          </h1>
+          <button onClick={onLogout} className="bg-red-600 px-4 py-2 rounded hover:bg-red-700">
+            Exit Admin
+          </button>
+        </div>
+
+        {loading ? (
+          <p>Loading server data...</p>
+        ) : (
+          <div className="grid gap-6">
+            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
+              <h2 className="text-xl font-bold mb-4">All Surprises ({stats.surprises.length})</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-gray-700 text-gray-400">
+                      <th className="p-3">ID</th>
+                      <th className="p-3">Sender</th>
+                      <th className="p-3">Receiver</th>
+                      <th className="p-3">Password (DOB)</th>
+                      <th className="p-3">Payment</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.surprises.map((s) => (
+                      <tr key={s.id} className="border-b border-gray-800 hover:bg-gray-750">
+                        <td className="p-3 font-mono text-xs">{s.id}</td>
+                        <td className="p-3">{s.senderName}</td>
+                        <td className="p-3">{s.receiverName}</td>
+                        <td className="p-3 text-yellow-400">{s.receiverDob}</td>
+                        <td className="p-3 text-green-400">{s.paymentStatus || 'Pending'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// 3. RECEIVER FLOW (The Surprise)
+const ReceiverView = ({ surpriseId }) => {
+  const [step, setStep] = useState('gate'); // gate, reveal
+  const [data, setData] = useState(null);
+  const [inputName, setInputName] = useState('');
+  const [inputDob, setInputDob] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSurprise = async () => {
+      if (!db) return;
+      try {
+        const docRef = doc(db, 'surprises', surpriseId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setData(docSnap.data());
+        } else {
+          setError("Surprise not found or deleted.");
+        }
+      } catch (err) {
+        setError("Error connecting to LoveLock server.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSurprise();
+  }, [surpriseId]);
+
+  const handleUnlock = (e) => {
+    e.preventDefault();
+    if (!data) return;
+
+    // Logic: Name is just for display/feeling. DOB is the key.
+    if (inputDob === data.receiverDob) {
+      setStep('reveal');
+    } else {
+      setError("Incorrect Date of Birth. Only true love knows the date!");
+    }
+  };
+
+  if (loading) return <div className="min-h-screen bg-pink-50 flex items-center justify-center">Loading LoveLock...</div>;
+  if (error && !data) return <div className="min-h-screen flex items-center justify-center text-red-500">{error}</div>;
+
+  // --- REVEAL VIEW ---
+  if (step === 'reveal') {
+    const timeLoved = calculateTimeTogether(data.firstMeetDate);
+    
+    return (
+      <div className="min-h-screen relative overflow-hidden text-white flex flex-col items-center justify-center p-6">
+        {/* Dynamic Background */}
+        <div 
+          className="absolute inset-0 z-0 bg-cover bg-center transition-all duration-1000"
+          style={{ 
+            backgroundImage: data.senderPhoto ? url(${data.senderPhoto}) : 'none',
+            backgroundColor: data.senderPhoto ? 'transparent' : '#ec4899'
+          }}
+        >
+          {/* Overlay for readability + Romantic Gradient */}
+          <div className={absolute inset-0 bg-gradient-to-b from-black/60 via-purple-900/40 to-black/80 ${data.senderPhoto ? 'backdrop-blur-md' : ''}}></div>
+        </div>
+
+        <FloatingHearts />
+
+        <div className="relative z-10 max-w-lg w-full text-center space-y-8 animate-fade-in-up">
+          <div className="mb-6">
+            <h1 className="text-4xl md:text-6xl font-serif text-pink-300 drop-shadow-lg mb-2">
+              Hello, {data.receiverName} ❤️
+            </h1>
+            <p className="text-xl italic text-gray-200">A surprise from {data.senderNickname || data.senderName}</p>
+          </div>
+
+          <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20 shadow-2xl transform hover:scale-105 transition-transform duration-500">
+            <p className="text-lg md:text-xl leading-relaxed font-light whitespace-pre-wrap">
+              "{data.customMessage || data.autoMessage}"
+            </p>
+          </div>
+
+          {/* Love Counter */}
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="bg-pink-600/80 p-4 rounded-lg">
+              <span className="block text-3xl font-bold">{timeLoved.years}</span>
+              <span className="text-xs uppercase tracking-widest">Years</span>
+            </div>
+            <div className="bg-pink-600/80 p-4 rounded-lg">
+              <span className="block text-3xl font-bold">{timeLoved.days}</span>
+              <span className="text-xs uppercase tracking-widest">Days</span>
+            </div>
+            <div className="bg-pink-600/80 p-4 rounded-lg">
+              <span className="block text-3xl font-bold">∞</span>
+              <span className="text-xs uppercase tracking-widest">Love</span>
+            </div>
+          </div>
+
+          <div className="pt-8 opacity-80 text-sm">
+            Started at <span className="font-bold text-pink-400">{data.firstMeetPlace}</span> on {data.firstMeetDate}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- GATE VIEW ---
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-rose-100 to-pink-200 flex items-center justify-center p-4">
+      <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-pink-500 to-purple-500"></div>
+        
+        <div className="bg-pink-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+          <Lock className="w-10 h-10 text-pink-600" />
+        </div>
+
+        <h2 className="text-2xl font-bold text-gray-800 mb-2">Locked for Love</h2>
+        <p className="text-gray-500 mb-8">This surprise is encrypted. Enter your details to unlock.</p>
+
+        <form onSubmit={handleUnlock} className="space-y-4">
+          <div className="text-left">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+            <div className="relative">
+              <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input 
+                type="text" 
+                value={inputName}
+                onChange={(e) => setInputName(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 outline-none"
+                placeholder="Name (e.g. Baby)"
+                required
+              />
+            </div>
+          </div>
+
+          <div className="text-left">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+            <div className="relative">
+              <Key className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input 
+                type="date" 
+                value={inputDob}
+                onChange={(e) => {
+                   setInputDob(e.target.value);
+                   setError('');
+                }}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 outline-none"
+                required
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-red-500 text-sm animate-pulse">{error}</p>}
+
+          <button 
+            type="submit"
+            className="w-full bg-gradient-to-r from-pink-500 to-rose-600 text-white font-bold py-3 rounded-lg shadow-lg hover:shadow-xl transition transform hover:-translate-y-1"
+          >
+            Unlock Surprise ❤️
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// 4. MAIN APP (SENDER & NAVIGATION)
+export default function App() {
+  // State
+  const [view, setView] = useState('landing'); // landing, login, register, dashboard, create, receiver-test
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [surprises, setSurprises] = useState([]);
+  const [adminMode, setAdminMode] = useState(false);
+  const [testSurpriseId, setTestSurpriseId] = useState(null);
+
+  // Forms
+  const [authForm, setAuthForm] = useState({ username: '', password: '', confirmPassword: '' });
+  const [surpriseForm, setSurpriseForm] = useState({
+    receiverName: '',
+    receiverDob: '',
+    firstMeetPlace: '',
+    firstMeetDate: '',
+    senderNickname: '',
+    customMessage: '',
+    senderPhoto: '', // base64 string
+  });
+
+  // Init Auth Listener
+  useEffect(() => {
+    if (!auth) {
+        setLoading(false); 
+        return;
+    }
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+      if (u) {
+        fetchUserSurprises(u.uid);
+        setView('dashboard');
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Simulating URL Param check for Receiver
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('surprise_id');
+    if (id) {
+      setTestSurpriseId(id);
+      setView('receiver-test');
+    }
+  }, []);
+
+  const fetchUserSurprises = async (uid) => {
+    if(!db) return;
+    const q = query(collection(db, 'surprises'), where('senderId', '==', uid));
+    const querySnapshot = await getDocs(q);
+    const list = [];
+    querySnapshot.forEach((doc) => list.push({ id: doc.id, ...doc.data() }));
+    setSurprises(list);
+  };
+
+  // --- HANDLERS ---
+
+  const handleAuth = async (isRegister) => {
+    // Admin Check
+    if (authForm.username === 'bunny' && authForm.password === 'Endla Mohan') {
+      setAdminMode(true);
+      return;
+    }
+
+    if (!auth) {
+        alert("Database not connected. Please configure Firebase.");
+        return;
+    }
+
+    try {
+      if (isRegister) {
+        if (authForm.password !== authForm.confirmPassword) {
+          alert("Passwords do not match!");
+          return;
+        }
+        // Using email auth, appending fake domain for username simplicity
+        const email = ${authForm.username}@lovelock.com;
+        await createUserWithEmailAndPassword(auth, email, authForm.password);
+      } else {
+        const email = ${authForm.username}@lovelock.com;
+        await signInWithEmailAndPassword(auth, email, authForm.password);
+      }
+    } catch (error) {
+      alert("Auth Error: " + error.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (adminMode) {
+      setAdminMode(false);
+      setView('landing');
+    } else {
+      await signOut(auth);
+      setView('landing');
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSurpriseForm({ ...surpriseForm, senderPhoto: reader.result });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleCreateSurprise = async (e) => {
+    e.preventDefault();
+    if (!db || !user) return;
+
+    const autoMsg = generateAutoMessage(
+      user.displayName || 'Your Love', 
+      surpriseForm.receiverName, 
+      surpriseForm.firstMeetPlace, 
+      calculateTimeTogether(surpriseForm.firstMeetDate).years
+    );
+
+    const payload = {
+      senderId: user.uid,
+      senderName: user.email.split('@')[0], // simplified name from email
+      ...surpriseForm,
+      autoMessage: autoMsg,
+      createdAt: new Date().toISOString(),
+      paymentStatus: 'PAID', // Simulated
+      views: 0
+    };
+
+    try {
+      await addDoc(collection(db, 'surprises'), payload);
+      await fetchUserSurprises(user.uid);
+      setView('dashboard');
+      // Reset form
+      setSurpriseForm({
+        receiverName: '', receiverDob: '', firstMeetPlace: '', 
+        firstMeetDate: '', senderNickname: '', customMessage: '', senderPhoto: ''
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Error saving surprise.");
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (window.confirm("Delete this surprise?")) {
+      await deleteDoc(doc(db, 'surprises', id));
+      fetchUserSurprises(user.uid);
+    }
+  };
+
+  // --- VIEWS RENDERING ---
+
+  if (adminMode) {
+    return <AdminPanel onLogout={handleLogout} />;
+  }
+
+  if (view === 'receiver-test' && testSurpriseId) {
+    return <ReceiverView surpriseId={testSurpriseId} />;
+  }
+
+  // AUTH VIEW
+  if (view === 'login' || view === 'register') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-pink-500 to-purple-600 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+          <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">
+            {view === 'login' ? 'Sender Login' : 'Create Account'}
+          </h2>
+          
+          <div className="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Username (ID)" 
+              className="w-full p-3 border rounded-lg"
+              value={authForm.username}
+              onChange={e => setAuthForm({...authForm, username: e.target.value})}
+            />
+            <input 
+              type="password" 
+              placeholder="Password" 
+              className="w-full p-3 border rounded-lg"
+              value={authForm.password}
+              onChange={e => setAuthForm({...authForm, password: e.target.value})}
+            />
+            {view === 'register' && (
+              <input 
+                type="password" 
+                placeholder="Confirm Password" 
+                className="w-full p-3 border rounded-lg"
+                value={authForm.confirmPassword}
+                onChange={e => setAuthForm({...authForm, confirmPassword: e.target.value})}
+              />
+            )}
+            
+            <button 
+              onClick={() => handleAuth(view === 'register')}
+              className="w-full bg-pink-600 text-white py-3 rounded-lg font-bold hover:bg-pink-700 transition"
+            >
+              {view === 'login' ? 'Login' : 'Register'}
+            </button>
+          </div>
+
+          <p className="mt-4 text-center text-gray-600 cursor-pointer hover:text-pink-600" onClick={() => setView(view === 'login' ? 'register' : 'login')}>
+            {view === 'login' ? "New Sender? Create ID" : "Already have ID? Login"}
+          </p>
+          <p className="mt-4 text-center text-xs text-gray-400 cursor-pointer" onClick={() => setView('landing')}>Back to Home</p>
+        </div>
+      </div>
+    );
+  }
+
+  // DASHBOARD
+  if (view === 'dashboard' && user) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <nav className="bg-white shadow p-4 flex justify-between items-center">
+          <h1 className="text-xl font-bold text-pink-600">LoveLock Dashboard</h1>
+          <button onClick={handleLogout} className="flex items-center gap-2 text-gray-600 hover:text-red-500">
+            <LogOut size={18} /> Logout
+          </button>
+        </nav>
+
+        <div className="max-w-4xl mx-auto p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-gray-800">Your Surprises</h2>
+            <button 
+              onClick={() => setView('create')}
+              className="bg-pink-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-pink-700 shadow-lg"
+            >
+              <Sparkles size={18} /> Create New
+            </button>
+          </div>
+
+          <div className="grid gap-4">
